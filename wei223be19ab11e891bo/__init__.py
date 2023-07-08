@@ -311,6 +311,7 @@ def proceed_to_next_keyword(_query, _chars_in_last_keyword):
     search_bar = find_element_with_timeout(DRIVER, 20,
                                            "//input[@class='woo-input-main']")  # the bar we will be looking for AFTER the first search
 
+    max_iterations = 4
     if YIELDED_ITEMS >= MAXIMUM_ITEMS_TO_COLLECT:
         logging.info(f"[Sina Weibo] proceed_to_next_keyword - Stopping.")      
         return False  # Stop the generator if the maximum number of items has been reached
@@ -342,7 +343,9 @@ def proceed_to_next_keyword(_query, _chars_in_last_keyword):
         logging.info("[Sina Weibo process] Could not encounter the latest search bar after entering query, exiting...")
         return False
 
-    for element in categories:        
+    for ie, element in enumerate(categories):        
+        if ie >= max_iterations:
+            break
         if YIELDED_ITEMS >= MAXIMUM_ITEMS_TO_COLLECT:
             logging.info(f"[Sina Weibo] proceed_to_next_keyword loop - Stopping.")      
             break  # Stop the generator if the maximum number of items has been reached
@@ -511,7 +514,7 @@ def read_parameters(parameters):
             min_post_length = parameters.get("min_post_length", DEFAULT_MIN_POST_LENGTH)
         except KeyError:
             min_post_length = DEFAULT_MIN_POST_LENGTH
-
+        
         try:
             keywords = parameters.get("keywords", DEFAULT_KEYWORDS)
         except KeyError:
@@ -591,13 +594,14 @@ async def query(parameters: dict) -> AsyncGenerator[Item, None]:
                     consecutive_rejected_items -= 1
                     if consecutive_rejected_items <= 0:
                         break
-
-            if len(_keywords) > 1:
-                for i in range(1, len(_keywords)):
+            
+            keywords = random.choices(_keywords, k = 3)
+            if len(keywords) > 1:
+                for i in range(1, len(keywords)):
                     if consecutive_rejected_items <= 0 or YIELDED_ITEMS:
                         break
-                    if proceed_to_next_keyword(_keywords[i], len(
-                            _keywords[i - 1])):  # navigate to the next keyword using the existing search bar
+                    if proceed_to_next_keyword(keywords[i], len(
+                            keywords[i - 1])):  # navigate to the next keyword using the existing search bar
                         async for item in process_and_send(scroll_collect()):  # append the following items to the list   
                             ####                                         
                             if YIELDED_ITEMS >= MAXIMUM_ITEMS_TO_COLLECT:
