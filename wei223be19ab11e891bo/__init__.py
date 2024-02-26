@@ -54,8 +54,15 @@ from exorde_data import (
 )
 import logging
 
+loggers = logging.Logger.manager.loggerDict
+
+# Print the names of all the loggers
+for name in loggers:
+    print(name)
+logging.getLogger('urllib3.connectionpool').setLevel(logging.WARNING)
+logging.getLogger('selenium.webdriver.remote.remote_connection').setLevel(logging.WARNING)
+
 # GLOBAL VARIABLES
-DRIVER = None
 CURRENT_DIR = Path(__file__).parent.absolute()
 USER_AGENTS = [
     'Mozilla/5.0 (iPad; CPU OS 12_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
@@ -68,12 +75,11 @@ USER_AGENTS = [
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15'
 ]
 
-global MAX_NUMBER_CONSECUTIVE_OLD_COMMENTS # max number of consecutive old comments to make us break the loop
-global CONSECUTIVE_OLD_COMMENTS_COUNT # current count of the consecutive old comments we encounter(ed)
-global MAXIMUM_ITEMS_TO_COLLECT # maximum number of items to collect
-global YIELDED_ITEMS # how many items we collected so far in the session
+# global MAX_NUMBER_CONSECUTIVE_OLD_COMMENTS # max number of consecutive old comments to make us break the loop
+# global CONSECUTIVE_OLD_COMMENTS_COUNT # current count of the consecutive old comments we encounter(ed)
+# global MAXIMUM_ITEMS_TO_COLLECT # maximum number of items to collect
+# global YIELDED_ITEMS # how many items we collected so far in the session
 
-CONSECUTIVE_OLD_COMMENTS_COUNT = 0
 SCROLL_SPEED_ACCELERATION = 1.15  # the scroll speed multiplier, very sensitive, modify with care
 
 # Wait timers to conduct various actions, modify with care
@@ -93,6 +99,9 @@ MAX_POST_AGE_IN_MINUTES = 30 # handled below by parameters, 30min is the default
 
 SECONDS_AGO = "秒前"  # how many seconds since the post was put online
 MINUTES_AGO = "分钟前"  # how many minutes since the post was put online
+
+logger = logging.getLogger('selenium.webdriver.remote.remote_connection')
+logger.setLevel(logging.WARNING)  # or any variant from ERROR, CRITICAL or NOTSET
 
 #############################################################################
 #############################################################################
@@ -135,7 +144,7 @@ def init_driver(headless=True, proxy=None, show_images=False, option=None, env="
     """ initiate a chromedriver instance
         --option : other option to add (str)
     """
-    global DRIVER
+    logging.info("Initializing new driver instance")
     http_proxy = get_proxy(env)
 
     binary_path = get_chrome_path()
@@ -153,6 +162,8 @@ def init_driver(headless=True, proxy=None, show_images=False, option=None, env="
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("disable-infobars")
     options.add_argument(f'user-agent={random.choice(USER_AGENTS)}')
+    options.add_argument("--log-level=3")
+    options.add_experimental_option("excludeSwitches", ["enable-logging"])
 
     # add proxy if available
     if http_proxy is not None:
@@ -200,8 +211,7 @@ def wait_random_short():
     sleep(random.uniform(SHORT_WAIT_TIME_MIN, SHORT_WAIT_TIME_MAX))
 
 
-def smooth_scrolling():
-    global DRIVER
+def smooth_scrolling(DRIVER):
     desired_scroll_height = int(DRIVER.execute_script("return document.body.scrollHeight"))
 
     for i in range(int(random.uniform(25, desired_scroll_height * 0.10)), desired_scroll_height,
@@ -251,7 +261,7 @@ def find_elements_with_timeout(_element, _timeout, _elements_query):
     return None
 
 
-def start_search(_url, _query):
+def start_search(_url, _query, DRIVER):
     """
     Start the inital search on a query. As there is a user path to follow to be able to access the latest tweets without
     being logged in on Sina Weibo, the first search will require accessing different objects, therefore justifying the
@@ -260,8 +270,8 @@ def start_search(_url, _query):
     :param _query: the query (or keyword) we wish to research
     :return: False if the initial search was unsuccessful (elements could not be accessed for example), true otherwise
     """
-    global DRIVER
     DRIVER.get(_url)
+    logging.info(f"\t Looking at {_url}")
 
     wait_random_long()
 
@@ -269,7 +279,7 @@ def start_search(_url, _query):
                                            "//input[@node-type='searchInput']")  # this is NOT the same input bar we will look for after
 
     if search_bar is None:
-        logging.info("[Sina Weibo search] Could not encounter the search bar on landing page, exiting...")
+        logging.info("Could not encounter the search bar on landing page, exiting...")
         return False
 
     wait_random()
@@ -279,26 +289,26 @@ def start_search(_url, _query):
     nav_bar = find_element_with_timeout(DRIVER, 10, "//div[@class='m-main-nav']")
 
     if nav_bar is None:
-        logging.info("[Sina Weibo search] Could not encounter the nav bar after entering query, exiting...")
+        logging.info("Could not encounter the nav bar after entering query, exiting...")
         return False
 
     categories = find_elements_with_timeout(nav_bar, 10, "//a[@href]")
 
     if categories is None:
-        logging.info("[Sina Weibo search] Could not encounter the latest search bar after entering query, exiting...")
+        logging.info("Could not encounter the latest search bar after entering query, exiting...")
         return False
 
     for element in categories:
         href = element.get_attribute("href")
         if "realtime" in href:  # this is what we are looking for
-            logging.info(f"[Sina Weibo search] Navigating to new query: {href}")
+            logging.info(f"Navigating to new query: {href}")
             element.click()
             break
 
     return True
 
 
-def proceed_to_next_keyword(_query, _chars_in_last_keyword):
+def proceed_to_next_keyword(_query, _chars_in_last_keyword, DRIVER, YIELDED_ITEMS):
     """
     Once the initial search complete, navigating to the next keyword we wish to search is far simpler. This function can
     be called multiple times once the initial search is done to pass the next keyword.
@@ -307,7 +317,6 @@ def proceed_to_next_keyword(_query, _chars_in_last_keyword):
     need to hit "backspace" to remove these characters organically in our search bar)
     :return: False if the search was unsuccessful (elements could not be accessed for example), true otherwise
     """
-    global DRIVER
     search_bar = find_element_with_timeout(DRIVER, 20,
                                            "//input[@class='woo-input-main']")  # the bar we will be looking for AFTER the first search
 
@@ -358,14 +367,12 @@ def proceed_to_next_keyword(_query, _chars_in_last_keyword):
     return True
 
 
-def scroll_collect():
+def scroll_collect(DRIVER):
     """
     Scroll down the page, up to 10 elements will be displayed without being logged in on Sina Weibo
     :return: the card elements (up to 10) that were loaded on the page after scrolling
     """
-    global DRIVER
-
-    smooth_scrolling()  # scroll smoothly all the way to the end of the page
+    smooth_scrolling(DRIVER)  # scroll smoothly all the way to the end of the page
 
     all_cards = DRIVER.find_elements(By.XPATH, "//div[@class='card']")  # get all the cards
 
@@ -394,7 +401,7 @@ def clean_content(content):
     content = ''.join(ch for ch in content if ch < '\uE000' or ch > '\uF8FF')
     return content.replace('#', ' ')
 
-async def process_and_send(_all_cards):
+async def process_and_send(_all_cards, YIELDED_ITEMS):
     """
     Asynchronous function to process every card and output data
     :param _all_cards: the cards containing all the items for the specified keyword
@@ -410,13 +417,11 @@ async def process_and_send(_all_cards):
         <p class="txt"/> : content of the post
     </div>
     """
-    global CONSECUTIVE_OLD_COMMENTS_COUNT, MAX_NUMBER_CONSECUTIVE_OLD_COMMENTS
+    logging.info("process and send")
 
     for card in _all_cards:
         try:
-            logging.debug(f"Max Consecutive old comments  = {MAX_NUMBER_CONSECUTIVE_OLD_COMMENTS}, current count = {CONSECUTIVE_OLD_COMMENTS_COUNT}")
-            if CONSECUTIVE_OLD_COMMENTS_COUNT >= MAX_NUMBER_CONSECUTIVE_OLD_COMMENTS:
-                break            
+     
             if YIELDED_ITEMS >= MAXIMUM_ITEMS_TO_COLLECT:
                 logging.debug(f"[Sina Weibo] process_and_send - Stopping.")      
                 break  # Stop the generator if the maximum number of items has been reached
@@ -437,12 +442,13 @@ async def process_and_send(_all_cards):
                     publish_time = reconstruct_time_stamp(element.text)
                     break
 
-            if publish_time is None or post_url is None:
-                logging.info("[Sina Weibo data] Skipping comment as it is too old...")
-                CONSECUTIVE_OLD_COMMENTS_COUNT += 1                
+            if publish_time is None:
+                logging.info(" (!) Skipping item because there is no publish_time.")
                 continue
-            else:
-                CONSECUTIVE_OLD_COMMENTS_COUNT = 0 # reset the count if we found a recent post
+            if post_url is None:
+                logging.info(" (!) Skipping item because there is no post_url.")
+                continue
+
 
             content = clean_content(content) # filtering weird chars
 
@@ -497,7 +503,7 @@ DEFAULT_URL = "https://weibo.com/login.php"
 DEFAULT_NUMBER_CONSECUTIVE_OLD_COMMENTS = 8
 
 def read_parameters(parameters):
-    global MAX_NUMBER_CONSECUTIVE_OLD_COMMENTS, CONSECUTIVE_OLD_COMMENTS_COUNT
+    global MAX_NUMBER_CONSECUTIVE_OLD_COMMENTS, CONSECUTIVE_OLD_COMMENTS_COUNT, MAXIMUM_ITEMS_TO_COLLECT
     # Check if parameters is not empty or None
     if parameters and isinstance(parameters, dict):
         try:
@@ -506,9 +512,9 @@ def read_parameters(parameters):
             max_oldness_seconds = DEFAULT_OLDNESS_SECONDS
 
         try:
-            maximum_items_to_collect = parameters.get("maximum_items_to_collect", DEFAULT_MAXIMUM_ITEMS)
+            MAXIMUM_ITEMS_TO_COLLECT = parameters.get("MAXIMUM_ITEMS_TO_COLLECT", DEFAULT_MAXIMUM_ITEMS)
         except KeyError:
-            maximum_items_to_collect = DEFAULT_MAXIMUM_ITEMS
+            MAXIMUM_ITEMS_TO_COLLECT = DEFAULT_MAXIMUM_ITEMS
 
         try:
             min_post_length = parameters.get("min_post_length", DEFAULT_MIN_POST_LENGTH)
@@ -530,13 +536,13 @@ def read_parameters(parameters):
     else:
         # Assign default values if parameters is empty or None
         max_oldness_seconds = DEFAULT_OLDNESS_SECONDS
-        maximum_items_to_collect = DEFAULT_MAXIMUM_ITEMS
+        MAXIMUM_ITEMS_TO_COLLECT = DEFAULT_MAXIMUM_ITEMS
         min_post_length = DEFAULT_MIN_POST_LENGTH
         keywords = DEFAULT_KEYWORDS
         url = DEFAULT_URL
         MAX_NUMBER_CONSECUTIVE_OLD_COMMENTS = DEFAULT_NUMBER_CONSECUTIVE_OLD_COMMENTS
 
-    return max_oldness_seconds, maximum_items_to_collect, min_post_length, keywords, url
+    return max_oldness_seconds, MAXIMUM_ITEMS_TO_COLLECT, min_post_length, keywords, url
 
 
 ############################################################################################################################
@@ -567,7 +573,10 @@ async def query(parameters: dict) -> AsyncGenerator[Item, None]:
     :param _keywords: the list of keywords we wish to itereate through
     :return: asynchronously yields the results per keyword. Starts with an initial search than moves on to the next keywords automatically
     """
-    global DRIVER, YIELDED_ITEMS, MAXIMUM_ITEMS_TO_COLLECT
+    logging.info("")
+    logging.info("")
+    logging.info("== NEW QUERY INSTANCE ==")
+
 
     max_oldness_seconds, MAXIMUM_ITEMS_TO_COLLECT, min_post_length, _keywords, _url = read_parameters(parameters)
     YIELDED_ITEMS = 0  # Counter for the number of yielded items
@@ -576,19 +585,23 @@ async def query(parameters: dict) -> AsyncGenerator[Item, None]:
     if "weibo.com" not in _url:
         raise ValueError("Not a Sina Weibo URL")
 
-    init_driver()  # init the driver
+    DRIVER = init_driver()  # init the driver
+    logging.info("Driver initialized")
     try:
-        if start_search(_url, _keywords[0]):  # navigate through the landing page to the first element that interests us (different layout)
+        # navigate through the landing page to the first element that interests us (different layout)
+        if start_search(_url, _keywords[0], DRIVER):
+            logging.info("starting scroll & collect")
             async for item in process_and_send(
-                    scroll_collect()):  # scroll through the page to collect all the elements relevant to us                 
+                scroll_collect(DRIVER), YIELDED_ITEMS
+            ):  # scroll through the page to collect all the elements relevant to us                 
                 if YIELDED_ITEMS >= MAXIMUM_ITEMS_TO_COLLECT:
-                    logging.info(f"[Sina Weibo] Stopping now.")      
+                    logging.info(f"Stopping now because YIELDED_ITEMS reached maximum ({YIELDED_ITEMS} / {MAXIMUM_ITEMS_TO_COLLECT})")
                     break  # Stop the generator if the maximum number of items has been reached
                 ### YIELDED ITEM                                                
                 if  is_within_timeframe_seconds(dt_str=item['created_at'], timeframe_sec=max_oldness_seconds) \
                     and item['content'] is not None and len(item['content']) >= min_post_length:
                     YIELDED_ITEMS += 1  # Increment the counter for yielded items          
-                    logging.info(f"[Sina Weibo] found {YIELDED_ITEMS} new posts..")      
+                    logging.info(f"Found {YIELDED_ITEMS} new posts for this query instance")      
                     yield item
                 else:                                
                     consecutive_rejected_items -= 1
@@ -601,21 +614,27 @@ async def query(parameters: dict) -> AsyncGenerator[Item, None]:
                     if consecutive_rejected_items <= 0 or YIELDED_ITEMS:
                         break
                     if proceed_to_next_keyword(keywords[i], len(
-                            keywords[i - 1])):  # navigate to the next keyword using the existing search bar
-                        async for item in process_and_send(scroll_collect()):  # append the following items to the list   
+                            keywords[i - 1]), DRIVER, YIELDED_ITEMS
+                    ):
+                        # navigate to the next keyword using the existing search bar
+                        async for item in process_and_send(scroll_collect(DRIVER), YIELDED_ITEMS):  # append the following items to the list   
                             ####                                         
                             if YIELDED_ITEMS >= MAXIMUM_ITEMS_TO_COLLECT:
+                                logging.info(f"Stopping now because YIELDED_ITEMS reached maximum ({YIELDED_ITEMS} / {MAXIMUM_ITEMS_TO_COLLECT})")
                                 break  # Stop the generator if the maximum number of items has been reached
                             ### YIELDED ITEM                                                
                             if  is_within_timeframe_seconds(dt_str=item['created_at'], timeframe_sec=max_oldness_seconds) \
                                 and item['content'] is not None and len(item['content']) >= min_post_length:
                                 YIELDED_ITEMS += 1  # Increment the counter for yielded items
-                                logging.info(f"[Sina Weibo] found {YIELDED_ITEMS} new posts..")     
+                                logging.info(f"Found {YIELDED_ITEMS} new posts..")     
                                 yield item
                             else:                                
                                 consecutive_rejected_items -= 1
+        logging.info("")
+        logging.info("== END OF QUERY PROCEDURE ==")
+        logging.info("")
     except Exception as e:
-        logging.info(f"[Sina Weibo Query Error]: {e}")
+        logging.exception(f"An error occured")
     finally:
-        logging.info("[Sina Weibo] Close driver")
+        logging.info("Closing driver")
         DRIVER.close()
